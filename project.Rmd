@@ -17,6 +17,7 @@ In order to evaluate our results, we compare with the treatment-selected mutatio
 
 To simplify the analysis, in this project we will confine our attention to the PI drugs.
 ```{r}
+library(stringr)
 drug_class = 'PI' # Possible drug types are 'PI', 'NRTI', and 'NNRTI'. 
 ```
 
@@ -145,7 +146,11 @@ selection <- function (X, y, alpha) {
   # Select the mutations that may associated with drug-resistance
   #######################
   #######################
-  ##### Your Code #######
+  full_model <- lm(y ~ ., data = as.data.frame(X))
+  model_selection <- step(full_model, direction = "both", k=2) # k=2 means use AIC as criteria, direction = both means use both back and forward step-wise selection methods, = forward means use forward step-wise selection
+  
+ # return(summary(model_selection))
+  
   #######################
   #######################
 }
@@ -154,15 +159,64 @@ alpha = 0.05 # the nominal FWER
 # results = lapply(Y, function(y) selection(X, y, alpha))
 ```
 
+```{r, results='hide' }
+results = lapply(Y, function(y) selection(X, y, alpha))
+```
+
+
+```{r}
+as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$APV)))[-1])$`row.names(as.data.frame(coef(results$APV)))[-1]`,"[0-9]+"))
+```
+
 
 ### Evaluating the results ###
 
 In this case, we are fortunate enough to have a “ground truth” obtained by another experiment  (data saved as `tsm_df`). Using this, we can evaluate the selected results. Note that we only need to compare the position of the mutations, not the mutation type. This is because it is known that multiple mutations at the same protease or RT position can often be associated with related drug-resistance outcomes.
+```{r，message=FALSE,warning=FALSE}
+library(tidyr)
+library(dplyr)
+```
+
+```{r, message=FALSE,warning=FALSE}
+
+
+#Extract Position from ground true df.
+ground_true_position <- tsm_df$Position
+
+
+#Extract 7 drugs positions used for fitting model
+APV_Position <- as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$APV)))[-1])$`row.names(as.data.frame(coef(results$APV)))[-1]`,"[0-9]+"))
+
+ATV_Position <- as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$ATV)))[-1])$`row.names(as.data.frame(coef(results$ATV)))[-1]`,"[0-9]+"))
+
+IDV_Position <- as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$IDV)))[-1])$`row.names(as.data.frame(coef(results$IDV)))[-1]`,"[0-9]+"))
+
+LPV_Position <- as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$LPV)))[-1])$`row.names(as.data.frame(coef(results$LPV)))[-1]`,"[0-9]+"))
+
+NFV_Position <- as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$NFV)))[-1])$`row.names(as.data.frame(coef(results$NFV)))[-1]`,"[0-9]+"))
+
+RTV_Position <- as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$RTV)))[-1])$`row.names(as.data.frame(coef(results$RTV)))[-1]`,"[0-9]+"))
+
+SQV_Position <- as.integer(str_extract(as.data.frame(row.names(as.data.frame(coef(results$SQV)))[-1])$`row.names(as.data.frame(coef(results$SQV)))[-1]`,"[0-9]+"))
+
+```
+
+```{r}
+# define a function to compute match rate
+eva_drug <- function (vector1,vector_true) {
+ compare_drug <- intersect(vector1, vector_true)
+ match_rate <- length(compare_drug)/length(vector_true)
+ return(match_rate)
+}
+```
+
+
 ```{r}
 # Evaluate the result by comparing it to the ground true
 #######################
 #######################
-##### Your Code #######
+eva_drug(APV_Position,ground_true_position);eva_drug(ATV_Position,ground_true_position);eva_drug(IDV_Position,ground_true_position);
+eva_drug(LPV_Position,ground_true_position);eva_drug(NFV_Position,ground_true_position);eva_drug(RTV_Position,ground_true_position);eva_drug(SQV_Position,ground_true_position)
 #######################
 #######################
 ```
@@ -177,15 +231,90 @@ col_index <- which( colnames(X) %in% mutation_name)
 candidate_X <- X[, col_index]
 ```
 
-We need to build a model by using candidate explanatory variables provided by `candidate_X` above. Build a model for prediction with an appropriate model selection criterion, which can be either AIC, BIC, or leave-one-out cross-validation error. Use an appropriate approach to evaluate the model you build. For example, you may split the data into two subsets, and use one for model building and the other for model evaluation. 
 ```{r}
+#Extract APV as response variable and check the dimension of response variable and predict variables before final pre-processing steps
+APV_y <- Y$APV 
+APV_y <- as.data.frame(APV_y)
+dim(APV_y);dim(candidate_X)
+```
+
+
+```{r, message=FALSE,warning=FALSE}
+# Run final pre-processing steps
+library(caret)
+library(MASS)
+
+ # Remove patients with missing measurements.
+  missing = is.na(APV_y)
+  APV_y = APV_y[!missing]
+  candidate_X = candidate_X[!missing,]
+```
+```{r}
+APV_y <- as.data.frame(APV_y)
+```
+```{r}
+  # Remove predictors that appear less than 3 times.
+  candidate_X = candidate_X[,colSums(candidate_X) >= 3]
+  
+  # Remove duplicate predictors.
+  candidate_X = candidate_X[,colSums(abs(cor(candidate_X)-1) < 1e-4) == 1]
+```
+
+```{r}
+#Check the dimension of response variable and predict variables after final pre-processing steps
+dim(APV_y);dim(candidate_X)
+```
+
+
+
+```{r}
+# Split "candidate_X" and response into training set and test set
+
+set.seed(1199)
+data_index <- createDataPartition(APV_y$APV_y, p = 0.7, list = FALSE)
+train_X <- candidate_X[data_index, ]
+train_y <- APV_y[data_index]
+test_X <- candidate_X[-data_index, ]
+test_y <- APV_y[-data_index]
+```
+```{r}
+#test_y <- as.numeric(test_y[,1])
+```
+
+We need to build a model by using candidate explanatory variables provided by `candidate_X` above. Build a model for prediction with an appropriate model selection criterion, which can be either AIC, BIC, or leave-one-out cross-validation error. Use an appropriate approach to evaluate the model you build. For example, you may split the data into two subsets, and use one for model building and the other for model evaluation. 
+```{r, results='hide'}
 # Model selection and prediction
 #######################
 #######################
-##### Your Code #######
+APV_model <- lm(train_y ~ ., data = as.data.frame(train_X))
+APV_selection <- step(APV_model, direction = "both", k=2)
 #######################
 #######################
 ```
+
+```{r}
+summary(APV_selection)
+```
+
+```{r}
+predict_APV <- predict(APV_selection, as.data.frame(test_X))  
+mse <- mean((predict_APV - test_y)^2)
+r_squared <- cor(predict_APV, test_y)^2
+mse;r_squared
+```
+
+
+
+
+```{r, results='hide'}
+APV_model_new <- lm(train_y ~  P84.A + P84.C + P33.F + P11.I + P32.I + P20.T + P47.V + P50.V + P76.V + P84.V + P89.V, data = as.data.frame(train_X))
+predict_APV_new <- predict(APV_model_new, as.data.frame(test_X)) 
+mse_new <- mean((predict_APV_new - test_y)^2)
+r_squared_new <- cor(predict_APV_new, test_y)^2
+mse_new;r_squared_new
+```
+
+
 
 ### References ###
 
